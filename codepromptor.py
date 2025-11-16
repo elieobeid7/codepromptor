@@ -13,24 +13,63 @@ def load_gitignore_patterns(root: str) -> Set[str]:
         with open(gitignore, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if line and not line.startswith("#"):
-                    patterns.add(line)
+                # Skip empty lines, comments and negation rules (not supported)
+                if not line or line.startswith("#") or line.startswith("!"):
+                    continue
+                patterns.add(line)
     return patterns
 
 
 def matches_pattern(path: str, patterns: Set[str]) -> bool:
+    """
+    Return True if `path` (relative to root) matches any of the ignore patterns.
+
+    Simplified .gitignore-style behavior:
+    - Patterns ending with "/" are treated as directory names and will match
+      any directory with that name at any depth (e.g. "node_modules/").
+    - Patterns starting with "/" are treated as anchored at the root.
+    - Plain globs like "*.png" or "dist" still work as before.
+    """
+    # Normalize to forward slashes and strip a leading "./" if present
     norm = path.replace(os.sep, "/")
+    if norm.startswith("./"):
+        norm = norm[2:]
+    segments = norm.split("/")
+
     for pat in patterns:
-        p = pat.replace(os.sep, "/")
-        if p.endswith("/"):
-            base = p[:-1]
-            if norm == base or norm.startswith(base + "/"):
-                return True
+        if not pat:
+            continue
+
+        raw = pat.replace(os.sep, "/")
+
+        # Leading "/" -> anchor at root
+        anchored = raw.startswith("/")
+        p = raw.lstrip("/") if anchored else raw
+
+        # Trailing "/" -> directory-only pattern
+        dir_only = p.endswith("/")
+        p = p.rstrip("/") if dir_only else p
+
+        # Directory-only patterns: "foo/" or "/foo/"
+        if dir_only:
+            if anchored:
+                # Must be exactly that dir at root or anything under it
+                if norm == p or norm.startswith(p + "/"):
+                    return True
+            else:
+                # Match any directory with that name anywhere in the path
+                if p in segments:
+                    return True
+
+        # Full-path glob (e.g. "dist/*.js")
         if fnmatch.fnmatch(norm, p):
             return True
-        for seg in norm.split("/"):
+
+        # Basename match ("*.png", "dist", ".env", etc.) against each path segment
+        for seg in segments:
             if fnmatch.fnmatch(seg, p):
                 return True
+
     return False
 
 
